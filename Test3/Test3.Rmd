@@ -1,0 +1,638 @@
+---
+title: "Machine Learning 2019"
+author:
+  - 袁欣
+date: "2019年3月29日"
+documentclass: ctexart
+output:
+  rticles::ctex:
+    number_sections: yes
+classoption: "hyperref,"
+geometry: tmargin=2.5cm,bmargin=2.5cm,lmargin=2cm,rmargin=2cm
+---
+
+```{r eval=TRUE, echo=FALSE, warning=FALSE}
+options(stringsAsFactors = FALSE)
+library(ggplot2)
+library(easyGgplot2)
+```
+# 决策树
+
+## 西瓜数据
+从csv文件中读取西瓜数据，并进行展示。 
+
+* 代码如下：
+```{r random number, eval = TRUE, echo = TRUE}
+wmda <- read.csv(file = "西瓜数据2.0.csv")
+wmda[, 8] <- as.factor(wmda[, 8])
+```
+* 数据展示：
+```{r summary1, eval = TRUE, echo = TRUE}
+knitr::kable(wmda)
+```
+
+## 决策树简介
+### 基本概念
+决策树（decision tree）是一种基本的分类与回归方法。这里主要讨论分类树。决策树模型呈树形结构，在分类问题中，表示基于特征对实例进行分类的过程。它可以认为是if-then规则的集合，也可以认为是定义在特征空间与类空间上的条件概率分布。其主要优点是模型具有可读性，分类速度快。学习时，利用训练数据，根据损失函数最小化的原则建立决策树模型。预测时，对新的数据，利用决策树模型进行分类。
+
+决策树学习通常包括3个步骤：特征选择、决策树的生成和决策树的修剪。这些决策树学习的思想主要来源于Quinlan在1986年提出的ID3算法和1993年提出的C4.5算法，以及由Breiman等人在1984年提出的CART算法。
+
+### 划分选择
+* 信息增益
+
+“信息熵”（information entropy）是度量样本集合纯度常用的一种指标。假定当前样本集合$D$中第$k$类样本所占的比例为$p_k(k=1,2,\ldots, y)$，则$D$的信息熵定义为
+$$
+Ent(D)=-\sum_{i=1}^yp_klog_2p_k
+$$
+$Ent(D)$的值越小，则$D$的纯度越高。
+
+信息增益是指离散属性$a$对原始样本$D$进行分类，从而使信息熵下降的值。可以用如下公式表示：
+$$
+Gain(D,a)=Ent(D)-\sum_{v=1}^V \frac{D^v}{D}Ent(D^v)
+$$
+其中$V$表示$a$共有$V$种属性，$\frac{D^v}{D}$对不同的属性进行了加权。一般而言，信息增益越大意味着使用属性$a$进行划分所获得的“纯度提升”越大。因此，我们可以用信息增益进行决策树的划分。
+
+* 编程实现
+```{r, ID3, echo=TRUE, eval=TRUE}
+TreeGenerate <- function(da, method = "ID3"){
+  
+  # Input
+  #    da : 1(ID), 1:n-1(attribute), n(label)
+  # Output
+  #    tree
+  
+  CalEnt <- function(pk){
+    Entd <- -(pk * log2(pk))
+    Entd[is.na(Entd)] <- 0
+    Entd <- sum(Entd)
+    return(Entd)
+  }
+  
+  tree <- list()
+  # compute boot node Entd
+  pvec <- as.numeric(table(da[, ncol(da)])) / nrow(da)
+  Entd <- CalEnt(pvec)
+  tree[[1]] <- list(a = "boot", aname = "boot", boot = da[, 1], Entd = Entd)
+  a <- 2 # count tree
+  dalist <- list(da = list(da = da), count = 1)
+  treelast <- list()
+  treenew <- list()
+  # Generate tree
+  while(length(dalist$da) > 0){
+    Retlist <- list()
+    k <- 1  # count dalistnew
+    dalistnew <- list()
+    for(t in 1:length(dalist$da)){
+      # 
+      count <- dalist$count
+      dat <- dalist$da[[t]]
+      # compute boot node Entd
+      pvec <- as.numeric(table(dat[, ncol(dat)])) / nrow(dat)
+      Entd <- CalEnt(pvec)
+      # choose attribute
+      AEnt <- rep(0, length = ncol(dat) - 2)
+      IV <- AEnt
+      Gini <- rep(0, length = ncol(dat) - 2)
+      ARetlist <- list()
+      for(i in 2:(ncol(dat)-1)){
+        avec <- levels(as.factor(dat[, i]))
+        aretlist <- list()
+        for(j in 1:length(avec)){
+          aj.boot <- dat[which(dat[, i] == avec[j]), 1]
+          pvec <- table(dat[which(dat[, 1] %in% aj.boot), ncol(dat)])
+          pvec <- as.numeric(pvec) / length(aj.boot)
+          AEnt[i-1] <- AEnt[i-1] + CalEnt(pvec) * length(aj.boot) / nrow(dat)
+          IV[i-1] <- IV[i-1] - length(aj.boot) / nrow(dat) * 
+            log2(length(aj.boot) / nrow(dat))
+          Gini[i-1] <- Gini[i-1] + (1-sum(pvec^2)) * length(aj.boot) / nrow(dat)
+          aretlist[[j]] <- list(a = colnames(dat)[i], aname = avec[j], 
+                                boot = aj.boot, Entd = CalEnt(pvec))
+        }
+        ARetlist[[i-1]] <- aretlist
+      }
+      # good attribute
+      ########## ID 3 #############
+      if(method == "ID3"){
+        ret <- ARetlist[[which(AEnt == min(AEnt))[1]]]
+      }
+      ######### C4.5 ############
+      if(method == "C4.5"){
+        ind <- which(AEnt <= mean(AEnt))
+        #
+        Gr <- (1 - AEnt[ind]) / IV[ind]
+        ret <- ARetlist[[ind[which(Gr == max(Gr))[1]]]]
+      }
+      ######## Gini ############
+      if(method == "Gini"){
+        ret <- ARetlist[[which(Gini == min(Gini))[1]]]
+      }
+      
+      #
+      retlist <- list()
+      
+      #           # print Tree last
+      if(count == 1){
+        print(paste("||", "Boot", " {" , paste(da[, 1], collapse = ",") ,"} ",
+                    "Ent = ", round(tree[[1]]$Entd, 3), sep = ""))
+      }else{
+        print(paste(paste(rep("..", count-1), collapse = "."), count-1, ")",
+                    tail(treelast[[t]]$a, 1), "=", tail(treelast[[t]]$aname, 1),
+                    " {" , paste(treelast[[t]]$boot, collapse = ",") ,"} ",
+                    sep = ""))
+      }
+      
+      for(i in 1 : length(ret)){
+        # Get the previous level of classification
+        # use treelast
+        if(count == 1){
+          treelast <- tree
+        }
+        classe <- as.character(da[which(da[, 1] %in% ret[[i]]$boot), ncol(da)])
+        classe <- table(as.numeric(classe))
+        
+        if(ret[[i]]$Entd == 0 | length(ret[[i]]$boot) == 0){
+           # print Tree
+           print(paste(paste(rep("..", count), collapse = "."), count, ")", 
+                       ret[[i]]$a, "=", ret[[i]]$aname,
+                       " {", paste(ret[[i]]$boot, collapse = ","), "} ",
+                       ifelse(names(which(classe == max(classe)))[1] == 1,
+                              "Good", "Bad"), sep = ""))
+           #
+          retlist[[i]] <- list(a = c(treelast[[t]]$a, ret[[i]]$a), 
+                          aname = c(treelast[[t]]$aname, ret[[i]]$aname), 
+                          boot = ret[[i]]$boot, Entd = ret[[i]]$Entd, 
+                          class = names(which(classe == max(classe)))[1])
+         }
+        
+        if(ret[[i]]$Entd != 0 & length(ret[[i]]$boot) != 0){
+          dalistnew[[k]] <- dat[which(dat[, 1] %in% ret[[i]]$boot), 
+                                -which(colnames(dat) == ret[[i]]$a)]
+          # truenew
+          treenew[[k]] <- list(a = c(treelast[[t]]$a, ret[[i]]$a), 
+                          aname = c(treelast[[t]]$aname, ret[[i]]$aname), 
+                          boot = ret[[i]]$boot, Entd = ret[[i]]$Entd, 
+                          class = names(which(classe == max(classe)))[1])
+          k <- k + 1
+        }
+      }
+      Retlist[[t]] <- retlist
+    } # end for (dalist)
+    count <- count + 1
+    tree[[count]] <- Retlist
+    dalistnew <- list(da = dalistnew, count = count)
+    dalist <- dalistnew
+    treelast <- treenew
+  } # end while
+  return(tree)
+}
+Tree <- TreeGenerate(wmda, method = "ID3")
+```
+
+* 增益率
+
+信息增益准则对可取值数目较多的属性有所偏好，为减少这种偏好可能带来的不利影响，Quinlan在1993年提出了C4.5算法，使用“增益率”（gain ratio）来选择最优划分属性。增益率的定义为：
+$$
+Gain\_ratio(D, a) = \dfrac{Gain(D, a)}{IV(a)}
+$$
+其中
+$$
+IV(a) = -\sum_{v=1}^V \frac{D^v}{D}log_2 \frac{D^v}{D}
+$$
+属性a的可能取值数目越多，则$IV(a)$的值通常会越大。增益率准则对可能取值数目较少的属性有所偏好。C4.5算法并不是直接选择增益率最大的候选划分属性，而是使用了一个启发式规则：先从候选划分属性中找出信息增益高于平均水平的属性，再从中选择增益率最高的。
+
+* 编程实现
+
+生成树`TreeGenerate()`函数中已经包含C4.5算法，仅需将`method`参数改为“C4.5”即可。
+
+```{r C4.5, eval=TRUE, echo=TRUE}
+Tree <- TreeGenerate(wmda, method = "C4.5")
+```
+
+
+* 基尼系数
+
+CART决策树[Breimaan et al. 1984]使用“基尼系数”（Gini index）来选择划分属性。数据集D的纯度可以用基尼值来度量：
+
+$$
+Gini(D)=\sum_{k=1}^y \sum_{k'\not=k}p_kp_{k'} = 1-\sum_{k=1}^yp_k^2
+$$
+
+基尼系数越小则数据集的纯度越高。属性$a$的基尼系数定义为：
+
+$$
+Gini_index(D, a) = \sum_{v=1}^V \frac{D^v}{D}Gini(D^v)
+$$
+
+* 编程实现
+```{r Gini, eval=TRUE, echo=TRUE}
+Tree <- TreeGenerate(wmda, method = "Gini")
+```
+
+通过对比发现，ID3与CART算法得到了相同得决策树。C4.5算法得到的决策树在第二层中选择了较少类别的属性（触感）。
+
+### 剪枝处理
+决策树剪枝的基本策略有“预剪枝”（prepruning）和“后剪枝”（postpruning）[Quinlan,1993]。
+
+* 预剪枝
+
+预剪枝是指在决策树生成过程中，对每个结点在划分前先进行估计，若当前节点的划分不能带来决策树泛化能力提升，则停止划分并将当前结点标记为叶节点。（需要划分训练集与测试集，根据准确率进行性能评估）
+
+* 代码实现
+
+首先划分训练集与测试集：
+```{r traintest, eval=TRUE, echo=TRUE}
+wmda.train <- wmda[c(1,2,3,6,7,10,14:17), c(1,6,2,3,4,5,7,8)]
+wmda.test <- wmda[c(4,5,8,9,11:13),  c(1,6,2,3,4,5,7,8)]
+```
+
+没有预剪枝的决策树为：
+```{r prepruning1, eval=TRUE, echo=TRUE}
+Tree.train <- TreeGenerate(wmda.train, method = "ID3")
+```
+
+```{r prepruning2, eval=TRUE, echo=FALSE}
+TreeGenerate2 <- function(da.train, da.test, method = "ID3"){
+  
+  # Input
+  #    da : 1(ID), 1:n-1(attribute), n(label)
+  # Output
+  #    tree
+  da <- da.train
+  
+  CalEnt <- function(pk){
+    Entd <- -(pk * log2(pk))
+    Entd[is.na(Entd)] <- 0
+    Entd <- sum(Entd)
+    return(Entd)
+  }
+  
+  tree <- list()
+  # compute boot node Entd
+  pvec <- as.numeric(table(da[, ncol(da)])) / nrow(da)
+  Entd <- CalEnt(pvec)
+  tree[[1]] <- list(a = "boot", aname = "boot", boot = da[, 1], Entd = Entd)
+  a <- 2 # count tree
+  dalist <- list(da = list(da = da), count = 1)
+  dalist.test <- list(da.test = list(da.test=da.test), count = 1)
+  treelast <- list()
+  treenew <- list()
+  treeall <- list()
+  # Generate tree
+  while(length(dalist$da) > 0){
+    Retlist <- list()
+    k <- 1  # count dalistnew
+    dalistnew <- list()
+    datestlistnew <- list()
+    for(t in 1:length(dalist$da)){
+      # 
+      count <- dalist$count
+      dat <- dalist$da[[t]]
+      dat.test <- dalist.test$da.test[[t]]
+      # compute boot node Entd
+      pvec <- as.numeric(table(dat[, ncol(dat)])) / nrow(dat)
+      Entd <- CalEnt(pvec)
+      # choose attribute
+      AEnt <- rep(0, length = ncol(dat) - 2)
+      IV <- AEnt
+      Gini <- rep(0, length = ncol(dat) - 2)
+      ARetlist <- list()
+      for(i in 2:(ncol(dat)-1)){
+        avec <- levels(as.factor(dat[, i]))
+        aretlist <- list()
+        for(j in 1:length(avec)){
+          aj.boot <- dat[which(dat[, i] == avec[j]), 1]
+          pvec <- table(dat[which(dat[, 1] %in% aj.boot), ncol(dat)])
+          pvec <- as.numeric(pvec) / length(aj.boot)
+          AEnt[i-1] <- AEnt[i-1] + CalEnt(pvec) * length(aj.boot) / nrow(dat)
+          IV[i-1] <- IV[i-1] - length(aj.boot) / nrow(dat) * 
+            log2(length(aj.boot) / nrow(dat))
+          Gini[i-1] <- Gini[i-1] + (1-sum(pvec^2)) * length(aj.boot) / nrow(dat)
+          aretlist[[j]] <- list(a = colnames(dat)[i], aname = avec[j], 
+                                boot = aj.boot, Entd = CalEnt(pvec))
+        }
+        ARetlist[[i-1]] <- aretlist
+      }
+      # good attribute
+      ########## ID 3 #############
+      if(method == "ID3"){
+        ret <- ARetlist[[which(AEnt == min(AEnt))[1]]]
+      }
+      ######### C4.5 ############
+      if(method == "C4.5"){
+        ind <- which(AEnt <= mean(AEnt))
+        #
+        Gr <- (1 - AEnt[ind]) / IV[ind]
+        ret <- ARetlist[[ind[which(Gr == max(Gr))[1]]]]
+      }
+      ######## Gini ############
+      if(method == "Gini"){
+        ret <- ARetlist[[which(Gini == min(Gini))[1]]]
+      }
+      
+      #
+      retlist <- list()
+      
+      #           # print Tree last
+      if(count == 1){
+        print(paste("||", "Boot", " {" , paste(da[, 1], collapse = ",") ,"} ",
+                    "Ent = ", round(tree[[1]]$Entd, 3), sep = ""))
+      }else{
+        print(paste(paste(rep("..", count-1), collapse = "."), count-1, ")",
+                    tail(treelast[[t]]$a, 1), "=", tail(treelast[[t]]$aname, 1),
+                    " {" , paste(treelast[[t]]$boot, collapse = ",") ,"} ",
+                    sep = ""))
+      }
+      ###### prepruning ######
+      # 
+      T.rat.old <- max(table(dat.test$label))/nrow(dat.test)
+      #
+      Tcount <- 0
+      for(i in 1:length(ret)){
+        reti <- ret[[i]]
+        if(length(reti)>0){
+          fl <- table(dat[which(dat[, 1] %in% reti$boot), ncol(dat)])
+          fl <- names(fl)[which(fl == max(fl))[1]]
+          ind1 <- which(colnames(dat.test) == reti$a)
+          ind2 <- which(dat.test[, ind1] == reti$aname)
+          Tcount <- Tcount + sum(as.numeric(as.character(dat.test[ind2, ncol(dat.test)]) == fl))
+        }else{
+          Tcount <- 0
+        }
+      }
+      if(Tcount/nrow(dat.test) <= T.rat.old){
+        cl <- table(dat.test$label)
+        print(paste("Class:", ifelse(names(cl)[which(cl == max(cl))[1]] == "1",
+                           "Good", "Bad"), sep = ""))
+        print("No increase in accuracy, terminate classification")
+
+        next()
+      }
+      ###
+      for(i in 1 : length(ret)){
+        # Get the previous level of classification
+        # use treelast
+        if(count == 1){
+          treelast <- tree
+        }
+        classe <- as.character(da[which(da[, 1] %in% ret[[i]]$boot), ncol(da)])
+        classe <- table(as.numeric(classe))
+        
+        if(ret[[i]]$Entd == 0 | length(ret[[i]]$boot) == 0){
+           # print Tree
+           print(paste(paste(rep("..", count), collapse = "."), count, ")", 
+                       ret[[i]]$a, "=", ret[[i]]$aname,
+                       " {", paste(ret[[i]]$boot, collapse = ","), "} ",
+                       ifelse(names(which(classe == max(classe)))[1] == 1,
+                              "Good", "Bad"), sep = ""))
+           #
+          retlist[[i]] <- list(a = c(treelast[[t]]$a, ret[[i]]$a), 
+                          aname = c(treelast[[t]]$aname, ret[[i]]$aname), 
+                          boot = ret[[i]]$boot, Entd = ret[[i]]$Entd, 
+                          class = names(which(classe == max(classe)))[1])
+         }
+        
+        if(ret[[i]]$Entd != 0 & length(ret[[i]]$boot) != 0){
+          dalistnew[[k]] <- dat[which(dat[, 1] %in% ret[[i]]$boot), 
+                                -which(colnames(dat) == ret[[i]]$a)]
+          ### dat
+          reti <- ret[[i]]
+          ind1 <- which(colnames(dat.test) == reti$a)
+          ind2 <- which(dat.test[, ind1] == reti$aname)
+          datestlistnew[[k]] <- dat.test[ind2, -which(colnames(dat.test) == reti$a)]
+          # truenew
+          treenew[[k]] <- list(a = c(treelast[[t]]$a, ret[[i]]$a), 
+                          aname = c(treelast[[t]]$aname, ret[[i]]$aname), 
+                          boot = ret[[i]]$boot, Entd = ret[[i]]$Entd, 
+                          class = names(which(classe == max(classe)))[1])
+          k <- k + 1
+        }
+      }
+      Retlist[[t]] <- retlist
+    } # end for (dalist)
+    if(length(Retlist) > 0){
+      count <- count + 1
+      tree[[count]] <- Retlist
+      dalistnew <- list(da = dalistnew, count = count)
+      datestlistnew <- list(da.test = datestlistnew, count = count)
+      dalist.test <- datestlistnew
+      dalist <- dalistnew
+      treelast <- treenew
+    }else{
+      dalistnew <- list(da = dalistnew, count = count)
+      datestlistnew <- list(da.test = datestlistnew, count = count)
+      dalist.test <- datestlistnew
+      dalist <- dalistnew
+    }
+  } # end while
+  return(tree)
+}
+
+```
+
+剪枝后的树为：
+```{r prepruning3, eval=TRUE, echo=TRUE}
+Tree <- TreeGenerate2(wmda.train, wmda.test, method = "ID3")
+```
+
+* 后剪枝
+
+先生成整棵树，通过判断剪枝后的精度是否提高进行剪枝处理。后剪枝决策树通常比预剪枝决策树保留了更多的分支，一般情况下，后剪枝决策树的欠拟合风险很小，泛化性能往往优于预剪枝决策树。
+
+### 连续值处理
+C4.5算法中采用二分法（bi-partition）对连续属性进行处理。给定样本集$D$和连续属性$a$，假定$a$在$D$上出现了$n$个不同得取值，将这些值排序后按照如下规则进行划分，选取最优划分点进行样本集合得划分。
+
+$$
+T_a = \{\frac{a^i + a^{i+1}}{2} |1\leqslant i \leqslant n-1 \}
+$$
+
+* 编程实现
+```{r countinue, eval=TRUE, echo=FALSE}
+TreeGenerate3 <- function(da, method = "ID3", countinue.ind = c(8, 9)){
+  
+  # Input
+  #    da : 1(ID), 1:n-1(attribute), n(label)
+  # Output
+  #    tree
+  method = "ID3"
+  indnames <- colnames(da)[countinue.ind]
+  CalEnt <- function(pk){
+    Entd <- -(pk * log2(pk))
+    Entd[is.na(Entd)] <- 0
+    Entd <- sum(Entd)
+    return(Entd)
+  }
+  
+  tree <- list()
+  # compute boot node Entd
+  pvec <- as.numeric(table(da[, ncol(da)])) / nrow(da)
+  Entd <- CalEnt(pvec)
+  tree[[1]] <- list(a = "boot", aname = "boot", boot = da[, 1], Entd = Entd)
+  a <- 2 # count tree
+  dalist <- list(da = list(da = da), count = 1)
+  treelast <- list()
+  treenew <- list()
+  # Generate tree
+  while(length(dalist$da) > 0){
+    Retlist <- list()
+    k <- 1  # count dalistnew
+    dalistnew <- list()
+    for(t in 1:length(dalist$da)){
+      # 
+      count <- dalist$count
+      dat <- dalist$da[[t]]
+      dat2 <- dat
+      # compute boot node Entd
+      pvec <- as.numeric(table(dat[, ncol(dat)])) / nrow(dat)
+      Entd <- CalEnt(pvec)
+      # choose attribute
+      AEnt <- rep(0, length = ncol(dat) - 2)
+      IV <- AEnt
+      Gini <- rep(0, length = ncol(dat) - 2)
+      ARetlist <- list()
+      for(i in 2:(ncol(dat)-1)){
+        ##### countinue ######
+        if(colnames(dat)[i] %in% indnames){
+          dat.order <- dat[order(dat[, i]),]
+          Ta1 <- dat.order[-nrow(dat.order), i]
+          Ta2 <- dat.order[-1, i]
+          Ta <- (Ta2 + Ta1) / 2
+          AEnt.temp <- rep(0, length(Ta))
+          IV.temp <- rep(0, length(Ta))
+          for(ii in 1:length(Ta)){
+            dat.temp <- dat
+            Taii <- Ta[ii]
+            ind1 <- which(dat.temp[, i] <= Taii)
+            ind2 <- which(dat.temp[, i] > Taii)
+            dat.temp[ind1, i] <- paste("<=", Taii)
+            dat.temp[ind2, i] <- paste(">", Taii)
+            ###
+            avec <- levels(as.factor(dat.temp[, i]))
+            aretlist <- list()
+            for(j in 1:length(avec)){
+              aj.boot <- dat.temp[which(dat.temp[, i] == avec[j]), 1]
+              pvec <- table(dat.temp[which(dat.temp[, 1] %in% aj.boot), ncol(dat.temp)])
+              pvec <- as.numeric(pvec) / length(aj.boot)
+              AEnt.temp[ii] <- AEnt.temp[ii] + CalEnt(pvec) * length(aj.boot) / nrow(dat.temp)
+              IV.temp[ii] <- IV.temp[ii] - length(aj.boot) / nrow(dat.temp) * 
+                log2(length(aj.boot) / nrow(dat.temp))
+              Gini[i-1] <- Gini[i-1] + (1-sum(pvec^2)) * length(aj.boot) / nrow(dat.temp)
+              aretlist[[j]] <- list(a = colnames(dat.temp)[i], aname = avec[j], 
+                                    boot = aj.boot, Entd = CalEnt(pvec))
+            }
+            
+          }
+          Tagood <- Ta[which(AEnt.temp == min(AEnt.temp))[1]]
+          ### ID3   ####
+          ind1 <- which(dat2[, i] <= Tagood)
+          ind2 <- which(dat2[, i] > Tagood)
+          dat2[ind1, i] <- paste("<=", Tagood)
+          dat2[ind2, i] <- paste(">", Tagood)
+          ### c4.5 ###
+        }
+        
+        avec <- levels(as.factor(dat2[, i]))
+        aretlist <- list()
+        for(j in 1:length(avec)){
+          aj.boot <- dat2[which(dat2[, i] == avec[j]), 1]
+          pvec <- table(dat2[which(dat[, 1] %in% aj.boot), ncol(dat2)])
+          pvec <- as.numeric(pvec) / length(aj.boot)
+          AEnt[i-1] <- AEnt[i-1] + CalEnt(pvec) * length(aj.boot) / nrow(dat2)
+          IV[i-1] <- IV[i-1] - length(aj.boot) / nrow(dat2) * 
+            log2(length(aj.boot) / nrow(dat2))
+          Gini[i-1] <- Gini[i-1] + (1-sum(pvec^2)) * length(aj.boot) / nrow(dat2)
+          aretlist[[j]] <- list(a = colnames(dat2)[i], aname = avec[j], 
+                                boot = aj.boot, Entd = CalEnt(pvec))
+        }
+        ARetlist[[i-1]] <- aretlist
+        
+        #####
+      }
+      # good attribute
+      ########## ID 3 #############
+      if(method == "ID3"){
+        ret <- ARetlist[[which(AEnt == min(AEnt))[1]]]
+      }
+      ######### C4.5 ############
+      if(method == "C4.5"){
+        ind <- which(AEnt <= mean(AEnt))
+        #
+        Gr <- (1 - AEnt[ind]) / IV[ind]
+        ret <- ARetlist[[ind[which(Gr == max(Gr))[1]]]]
+      }
+      ######## Gini ############
+      if(method == "Gini"){
+        ret <- ARetlist[[which(Gini == min(Gini))[1]]]
+      }
+      
+      #
+      retlist <- list()
+      
+      #           # print Tree last
+      if(count == 1){
+        print(paste("||", "Boot", " {" , paste(da[, 1], collapse = ",") ,"} ",
+                    "Ent = ", round(tree[[1]]$Entd, 3), sep = ""))
+      }else{
+        print(paste(paste(rep("..", count-1), collapse = "."), count-1, ")",
+                    tail(treelast[[t]]$a, 1), "=", tail(treelast[[t]]$aname, 1),
+                    " {" , paste(treelast[[t]]$boot, collapse = ",") ,"} ",
+                    sep = ""))
+      }
+      
+      for(i in 1 : length(ret)){
+        # Get the previous level of classification
+        # use treelast
+        if(count == 1){
+          treelast <- tree
+        }
+        classe <- as.character(da[which(da[, 1] %in% ret[[i]]$boot), ncol(da)])
+        classe <- table(as.numeric(classe))
+        
+        if(ret[[i]]$Entd == 0 | length(ret[[i]]$boot) == 0){
+           # print Tree
+           print(paste(paste(rep("..", count), collapse = "."), count, ")", 
+                       ret[[i]]$a, "=", ret[[i]]$aname,
+                       " {", paste(ret[[i]]$boot, collapse = ","), "} ",
+                       ifelse(names(which(classe == max(classe)))[1] == 1,
+                              "Good", "Bad"), sep = ""))
+           #
+          retlist[[i]] <- list(a = c(treelast[[t]]$a, ret[[i]]$a), 
+                          aname = c(treelast[[t]]$aname, ret[[i]]$aname), 
+                          boot = ret[[i]]$boot, Entd = ret[[i]]$Entd, 
+                          class = names(which(classe == max(classe)))[1])
+         }
+        
+        if(ret[[i]]$Entd != 0 & length(ret[[i]]$boot) != 0){
+          dalistnew[[k]] <- dat[which(dat[, 1] %in% ret[[i]]$boot), 
+                                -which(colnames(dat) == ret[[i]]$a)]
+          # truenew
+          treenew[[k]] <- list(a = c(treelast[[t]]$a, ret[[i]]$a), 
+                          aname = c(treelast[[t]]$aname, ret[[i]]$aname), 
+                          boot = ret[[i]]$boot, Entd = ret[[i]]$Entd, 
+                          class = names(which(classe == max(classe)))[1])
+          k <- k + 1
+        }
+      }
+      Retlist[[t]] <- retlist
+    } # end for (dalist)
+    count <- count + 1
+    tree[[count]] <- Retlist
+    dalistnew <- list(da = dalistnew, count = count)
+    dalist <- dalistnew
+    treelast <- treenew
+  } # end while
+  return(tree)
+}
+```
+
+```{r data3.0, eval=TRUE, echo=TRUE}
+wmda <- read.csv(file = "西瓜数据3.0.csv")
+wmda[, 10] <- as.factor(wmda[, 10])
+knitr::kable(head(wmda, 2))
+Tree <- TreeGenerate3(wmda)
+```
+
+### 多变量决策树
+
+多变量决策树把每个属性视为坐标空间中的一个坐标轴，则$d$个属性描述的样本对应了$d$维空间的一个数据点，对样本分类则意味着在这个坐标空间中寻找不同样本之间的分类边界。具体理论不再详细阐述。
+
+

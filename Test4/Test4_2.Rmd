@@ -1,0 +1,598 @@
+---
+title: "Machine Learning 2019"
+author:
+  - 袁欣
+date: "2019年4月11日"
+documentclass: ctexart
+output:
+  rticles::ctex:
+    number_sections: yes
+classoption: "hyperref,"
+geometry: tmargin=2.5cm,bmargin=2.5cm,lmargin=3cm,rmargin=3cm
+---
+
+```{r eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE}
+options(stringsAsFactors = FALSE)
+library(ggplot2)
+library(easyGgplot2)
+library(MASS)
+library(CVXR)
+library(reshape2)
+```
+
+# 支持向量机
+
+* 构建数据集
+
+随机生成服从二元正态分布的40个样本，其中20个样本均值为$[3,6]^T$，协方差阵为单位矩阵，设置标签为-1；20个样本均值为$[6,3]^T$，协方差阵仍为单位矩阵，设置标签为-1（确保两类样本线性可分）。然后按照7：3的比例将样本分为训练集与测试集，并画出训练集图形。
+
+```{r creatdata1, eval=TRUE, echo=FALSE}
+
+CreatData <- function(n, mu1, mu2, Sigma, seed = 3, alha = 0.7){
+  set.seed(seed)
+  X1 <- mvrnorm(n, mu1, Sigma)
+  X1 <- data.frame(x1 = X1[, 1], x2 = X1[, 2])
+  Y1 <- rep(-1, n)
+  set.seed(seed)
+  X2 <- mvrnorm(n, mu2, Sigma)
+  X2 <- data.frame(x1 = X2[, 1], x2 = X2[, 2])
+  Y2 <- rep(1, n)
+  X1.train <- X1[1:floor(n*alha), ]
+  X1.test <- X1[(floor(n*alha) + 1):n, ]
+  X2.train <- X2[1:floor(n*alha), ]
+  X2.test <- X2[(floor(n*alha) + 1):n, ]
+  Y1.train <- Y1[1:floor(n*alha)]
+  Y1.test <- Y1[(floor(n*alha) + 1):n]
+  Y2.train <- Y2[1:floor(n*alha)]
+  Y2.test <- Y2[(floor(n*alha) + 1):n]
+  X.train <- rbind(X1.train, X2.train)
+  X.test <- rbind(X1.test, X2.test)
+  Y.train <- data.frame(Y = as.factor(c(Y1.train, Y2.train)))
+  Y.test <- data.frame(Y = as.factor(c(Y1.test, Y2.test)))
+  return(list(data.train = cbind(X.train, Y.train),
+              data.test = cbind(X.test, Y.test)))
+}
+data1 <- CreatData(20, c(3, 6), c(6, 3), diag(2))
+data1.train <- data1$data.train
+data1.test <- data1$data.test
+ggplot(data = data1.train, aes(x = x1, y = x2, colour = Y)) + 
+  geom_point(size = 2.0, shape = 16) + 
+  labs(title="Train Data (Separable)") + theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+
+随机生成服从二元正态分布的200个样本，其中100个样本均值为$[3,6]^T$，协方差阵为单位矩阵，设置标签为-1；100个样本均值为$[6,3]^T$，协方差阵仍为单位矩阵，设置标签为-1（确保两类样本线性不可分）。然后按照7：3的比例将样本分为训练集与测试集，并画出训练集图形。
+
+```{r creatdata2, eval=TRUE, echo=FALSE}
+data2 <- CreatData(100, c(3, 6), c(6, 3), diag(2), seed = 2)
+data2.train <- data2$data.train
+data2.test <- data2$data.test
+ggplot(data = data2.train, aes(x = x1, y = x2, colour = Y)) + 
+  geom_point(size = 2.0, shape = 16) + 
+  labs(title="Train Data (Inseparable)") + theme(plot.title = element_text(hjust = 0.5))
+```
+
+* 基本形式求解
+
+```{r svmcvx1, eval=TRUE, echo=FALSE}
+X <- as.matrix(data1.train[, 1:2])
+Y <- as.matrix(as.numeric(as.character(data1.train[, 3])))
+
+SVMbase <- function(X, Y){
+  # 
+  n <- ncol(X)
+  m <- nrow(Y)
+  w <- Variable(n)
+  b <- Variable(1)
+  objective <- Minimize(1/2 * norm(w, "F")^2)
+  constraints <- list(Y * (X %*% w + b) >= 1)
+  prob <- Problem(objective, constraints)
+  
+  # Problem solution
+  solution <- solve(prob)
+  w_res <- solution$getValue(w)
+  b_res <- solution$getValue(b)
+  return(list(w_res = w_res, b_res = b_res))
+}
+modelbase <- SVMbase(X, Y)
+w_res <- modelbase$w_res
+b_res <- modelbase$b_res
+
+ggplot(data = data1.train, aes(x = x1, y = x2, colour = Y)) + 
+  geom_point(size = 2.0, shape = 16) + 
+  geom_abline(slope = -w_res[1]/w_res[2], intercept = -b_res/w_res[2], colour = "red") + 
+  labs(title="Base Model(Separable)") + theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+* 测试集检验
+
+```{r predict, eval=TRUE, echo=FALSE}
+predictbase <- function(da, w_res, b_res){
+  n <- ncol(da)
+  m <- nrow(da)
+  X <- as.matrix(da[, 1:(n-1)])
+  preY <- X %*% w_res + b_res
+  preY <- ifelse(preY >= 0, 1, -1)
+  # print cof matrix
+  TY <- da[, 3]
+  return(preY)
+}
+preY <- predictbase(data1.test, w_res, b_res)
+
+ggplot(data = data1.test, aes(x = x1, y = x2, colour = Y)) + 
+  geom_point(size = 2.0, shape = 16) + 
+  geom_abline(slope = -w_res[1]/w_res[2], intercept = -b_res/w_res[2], colour = "red") + 
+  labs(title="Base Model(Test)") + theme(plot.title = element_text(hjust = 0.5))
+```
+
+* 对偶问题求解
+
+```{r svmcvx2, eval=TRUE, echo=FALSE}
+X <- as.matrix(data1.train[, 1:2])
+Y <- as.matrix(as.numeric(as.character(data1.train[, 3])))
+
+SVMdual <- function(X, Y){
+  n <- ncol(X)
+  m <- nrow(Y)
+  A <- Variable(m)
+  
+  objective <- Minimize(-sum(A) + 1/2 * quad_form(Y * A, X %*%t(X)))
+  constraints <- list(A >= 0, sum(Y * A) == 0)
+  prob <- Problem(objective, constraints)
+  
+  # Problem solution
+  solution <- solve(prob)
+  A_res <- solution$getValue(A)
+  
+  w_res <- colSums(cbind(Y * A_res, Y * A_res) * X)
+  # cal b_res(according to support vector)
+  ind <- which(A_res > 0.00001)[1]
+  b_res <- (1 - (Y[ind, 1])*(t(X[ind, ])%*%w_res)) / Y[ind, 1]
+
+  # b_res <- Y[ind, 1] - sum(A_res * Y *  X %*% t(X[ind, , drop = FALSE]))
+  return(list(w_res = w_res, b_res = b_res))
+}
+modeldual <- SVMdual(X, Y)
+w_res <- modelbase$w_res
+b_res <- modelbase$b_res
+
+ggplot(data = data1.train, aes(x = x1, y = x2, colour = Y)) + 
+  geom_point(size = 2.0, shape = 16) + 
+  geom_abline(slope = -w_res[1]/w_res[2], intercept = -b_res/w_res[2], colour = "red") +
+  labs(title="The dual solution") + theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+* 核函数
+
+当原始样本空间不存在能正确划分两类样本的超平面时，我们需要将样本从原始空间映射到一个更高维的特征空间，使得样本在这个特征空间内线性可分。
+
+```{r svmGaussian, eval=TRUE, echo=FALSE}
+X <- as.matrix(data2.train[, 1:2])
+Y <- as.matrix(as.numeric(as.character(data2.train[, 3])))
+
+GaussianK <- function(xi, xj, Sigma = 1){
+  temp <- exp(-sum((xi - xj)^2)/(2 * Sigma^2))
+  return(temp)
+}
+SVMGaussiank <- function(X, Y, Sigma = 1){
+  
+  n <- ncol(X)
+  m <- nrow(Y)
+  A <- Variable(m)
+  
+  KernelM <- matrix(0, m, m)
+  for(i in 1:m){
+    for(j in 1:m){
+      KernelM[i, j] <- GaussianK(X[i, ], X[j, ], Sigma)
+    }
+  }
+  # 
+  objective <- Minimize(-sum(A) + 1/2 * quad_form(Y * A, KernelM))
+  constraints <- list(A >= 0, sum(Y * A) == 0)
+  prob <- Problem(objective, constraints)
+
+  # Problem solution
+  solution <- solve(prob)
+  A_res <- solution$getValue(A)
+  
+  # cal b_res(according to support vector)
+  ind <- which(A_res > 0.00001)[1]
+  b_res <- Y[ind, 1] - sum(A_res * Y * KernelM[, ind])
+  return(list(A_res = A_res, b_res = b_res, X = X, Y = Y, Sigma = Sigma))
+}
+
+modelGauss <- SVMGaussiank(X, Y, 1)
+
+# predict
+
+PredictGauss <- function(newda, modelGauss){
+  #
+  A_res <- modelGauss$A_res
+  b_res <- modelGauss$b_res
+  X <- modelGauss$X
+  Y <- modelGauss$Y
+  Sigma <- modelGauss$Sigma
+  #
+  newX <- as.matrix(newda[, 1:2])
+  newY <- newda[, 3]
+  newm <- nrow(newda)
+  m <- nrow(X)
+  KernelM <- matrix(0, m, newm)
+  for(i in 1:m){
+    for(j in 1:newm){
+      KernelM[i, j] <- GaussianK(X[i, ], newX[j, ], Sigma)
+    }
+  }
+  # 
+  preYvalue <- colSums(matrix(rep(A_res * Y, newm), ncol = newm) * KernelM) + b_res
+  preSign <- ifelse(preYvalue >= 0, 1, -1)
+  tb <- table(preSign, newY)
+  return(list(preYvalue = preYvalue, preSign = preSign, tb = tb))
+}
+
+PreGauss.train <- PredictGauss(data2.train, modelGauss)
+# The Train confusion matrix
+
+Wherefx0 <- function(modelGauss){
+  #
+  X <- modelGauss$X
+  Sigma <- modelGauss$Sigma
+  #
+  x1 <- seq(min(X[, 1]), max(X[, 1]),0.05)
+  x2 <- seq(min(X[, 2]), max(X[, 2]),0.05)
+  newda <- outer(x1, x2)
+  colnames(newda) <- x2
+  rownames(newda) <- x1
+  newda <- melt(newda)
+  newda$value <- 0
+  colnames(newda) <- c("x1", "x2", "Y")
+  Pred <- PredictGauss(newda, modelGauss)
+  newda$Y <- Pred$preYvalue
+  return(newda)
+}
+
+fx0 <- Wherefx0(modelGauss)
+
+ggplot(data = data2.train, aes(x = x1, y = x2, colour = Y)) + 
+  geom_point(size = 2.0, shape = 16) + 
+  labs(title="Gaussian Kernel SVM") + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  stat_contour(data = fx0, aes(x = x1, y = x2, z = Y, colour = "bond"), breaks=c(0))
+
+```
+
+* 测试集检验
+
+```{r guassKerneltest, eval=TRUE, echo=FALSE}
+PreGauss.test <- PredictGauss(data2.test, modelGauss)
+# The Test confusion matrix
+ggplot(data = data2.test, aes(x = x1, y = x2, colour = Y)) + 
+  geom_point(size = 2.0, shape = 16) + 
+  labs(title="Gaussian Kernel SVM (Test)") + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  stat_contour(data = fx0, aes(x = x1, y = x2, z = Y, colour = "bond"), breaks=c(0))
+```
+
+* 软间隔与正则化
+
+当样本空间线性不可分时，我们除了引入核函数的方法以外，还可以利用软间隔与正则化。软间隔（soft margin）的思想是允许支持向量机在一些样本上出错。
+
+```{r svmsoftmargin, eval=TRUE, echo=FALSE}
+X <- as.matrix(data2.train[, 1:2])
+Y <- as.matrix(as.numeric(as.character(data2.train[, 3])))
+
+SVMSoftMargin <- function(X, Y, C = 1){
+  # 
+  n <- ncol(X)
+  m <- nrow(Y)
+  w <- Variable(n)
+  b <- Variable(1)
+  xi <- Variable(m)
+  objective <- Minimize(1/2 * norm(w, "F")^2 + C*sum(xi))
+  constraints <- list(xi >= 0, Y * (X %*% w + b) >= 1-xi)
+  prob <- Problem(objective, constraints)
+  
+  # Problem solution
+  solution <- solve(prob)
+  w_res <- solution$getValue(w)
+  b_res <- solution$getValue(b)
+  return(list(w_res = w_res, b_res = b_res))
+}
+modelsoftmargin <- SVMSoftMargin(X, Y, C = 1)
+w_res <- modelsoftmargin$w_res
+b_res <- modelsoftmargin$b_res
+
+ggplot(data = data2.train, aes(x = x1, y = x2, colour = Y)) + 
+  geom_point(size = 2.0, shape = 16) + 
+  geom_abline(slope = -w_res[1]/w_res[2], intercept = -b_res/w_res[2], colour = "red") + 
+  labs(title="") + theme(plot.title = element_text(hjust = 0.5)) + 
+  labs(title="Soft Margin SVM (Base)(Train)") + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+* 测试集检验
+
+```{r sofemargintest, eval=TRUE, echo=FALSE}
+preY <- predictbase(data2.test, w_res, b_res)
+ggplot(data = data2.test, aes(x = x1, y = x2, colour = Y)) + 
+  geom_point(size = 2.0, shape = 16) + 
+  geom_abline(slope = -w_res[1]/w_res[2], intercept = -b_res/w_res[2], colour = "red") + 
+  labs(title="Soft Margin SVM (Base)(Test)") + theme(plot.title = element_text(hjust = 0.5))
+```
+
+* 对偶问题求解
+
+* 编程实现
+```{r SVMSoftMarginDual, echo=FALSE, eval=TRUE}
+X <- as.matrix(data2.train[, 1:2])
+Y <- as.matrix(as.numeric(as.character(data2.train[, 3])))
+
+SVMSoftMarginDual <- function(X, Y, C = 1){
+  n <- ncol(X)
+  m <- nrow(Y)
+  A <- Variable(m)
+  
+  objective <- Minimize(-sum(A) + 1/2 * quad_form(Y * A, X %*%t(X)))
+  constraints <- list(A >= 0, A <= C, sum(Y * A) == 0)
+  prob <- Problem(objective, constraints)
+  
+  # Problem solution
+  solution <- solve(prob)
+  A_res <- solution$getValue(A)
+  
+  w_res <- colSums(cbind(Y * A_res, Y * A_res) * X)
+  # cal b_res(according to support vector)
+  
+  ind <- which(A_res > 0.00001)
+  b_res <- min(1 - (Y[ind, 1])*(X[ind, ]%*%w_res))
+  
+  return(list(w_res = w_res, b_res = b_res))
+}
+modelSoftMDual <- SVMSoftMarginDual(X, Y)
+w_res <- modelSoftMDual$w_res
+b_res <- modelSoftMDual$b_res
+
+ggplot(data = data2.train, aes(x = x1, y = x2, colour = Y)) + 
+  geom_point(size = 2.0, shape = 16) + 
+  geom_abline(slope = -w_res[1]/w_res[2], intercept = -b_res/w_res[2], colour = "red") +
+  labs(title="Soft Margin SVM (Dual)(Train)") + theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+
+当然基于高斯核函数的支持向量机也可以加入软间隔降低模型过拟合的可能。
+
+```{r svmGaussianSoftMargin, eval=TRUE, echo=FALSE}
+X <- as.matrix(data2.train[, 1:2])
+Y <- as.matrix(as.numeric(as.character(data2.train[, 3])))
+
+SVMGaussiankSoftMargin <- function(X, Y, Sigma = 1, C = 1){
+  
+  n <- ncol(X)
+  m <- nrow(Y)
+  A <- Variable(m)
+  
+  KernelM <- matrix(0, m, m)
+  for(i in 1:m){
+    for(j in 1:m){
+      KernelM[i, j] <- GaussianK(X[i, ], X[j, ], Sigma)
+    }
+  }
+  # 
+  objective <- Minimize(-sum(A) + 1/2 * quad_form(Y * A, KernelM))
+  constraints <- list(A >= 0, A <= C, sum(Y * A) == 0)
+  prob <- Problem(objective, constraints)
+
+  # Problem solution
+  solution <- solve(prob)
+  A_res <- solution$getValue(A)
+  
+  # cal b_res(according to support vector)
+  ind <- which(A_res > 0.00001)
+  b_res <- min(1 - (Y[ind, 1])*
+                 colSums(matrix(rep(A_res * Y, length(ind)), ncol = length(ind)) 
+                         * KernelM[, ind]))
+  
+  return(list(A_res = A_res, b_res = b_res, X = X, Y = Y, Sigma = Sigma))
+}
+
+modelGauss <- SVMGaussiankSoftMargin(X, Y, 1, 10)
+
+PreGauss.train <- PredictGauss(data2.train, modelGauss)
+
+fx0 <- Wherefx0(modelGauss)
+
+ggplot(data = data2.train, aes(x = x1, y = x2, colour = Y)) + 
+  geom_point(size = 2.0, shape = 16) + 
+  labs(title="Gaussian Kernel SVM (Soft Margin, C=10)") + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  stat_contour(data = fx0, aes(x = x1, y = x2, z = Y, colour = "bond"), breaks=c(0))
+
+```
+
+* 支持向量多分类
+
+我们利用OvR训练N个分类器解决支持向量机多分类问题。OvR每次将一个类的样本作为正例、所有其他类的样本作为反例来进行训练，训练完成后分别计算各分类器的$f(x)$，将样本划分到$f(x)$取最大值的类别。
+
+* Iris数据集
+
+```{r irisdata, echo=FALSE, eval=TRUE}
+set.seed(1)
+ind <- sample(1:150, 100)
+iris.train <- iris[ind, c(3:5)]
+iris.test <- iris[c(1:150)[-ind], c(3:5)]
+ggplot(data = iris.train, aes(x = Petal.Length, y = Petal.Width, colour = Species)) + 
+  geom_point(size = 2.0, shape = 16) + labs(title="Iris Train Data") + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+* 编程实现
+
+```{r MultiGuassSVM, echo=FALSE, eval=TRUE}
+
+MultiGuassSVM <- function(da, Sigma = 1, C = 10000){
+  #
+  m <- nrow(da)
+  n <- ncol(da)
+  #
+  label <- levels(da[, ncol(da)])
+  N <- length(label)
+  X <- as.matrix(da[, 1:(n-1)])
+  #
+  fxdata <- data.frame(matrix(0, ncol = N, nrow = m))
+  modellist <- list()
+  for(i in 1:N){
+    # 
+    labeli <- label[i]
+    Yi <- ifelse(da[, ncol(da)] == labeli, 1, -1)
+    Yi <- matrix(Yi, ncol = 1)
+    dai <- da
+    dai[, ncol(dai)] <- Yi
+    
+    modeli <- SVMGaussiankSoftMargin(X, Yi, Sigma, C)
+    PreGaussi <- PredictGauss(dai, modeli)
+    fxdata[, i] <- PreGaussi$preYvalue
+    modellist[[i]] <- modeli
+  }
+  Presign <- apply(fxdata, 1, function(x){order(x, decreasing=T)[1]})
+  Presign <- label[Presign]
+  return(list(modellist = modellist, Presign = Presign, fxdata = fxdata, 
+              label = label, tb = table(Presign, True = da[, ncol(da)])))
+}
+modelMultSVM <- MultiGuassSVM(iris.train, Sigma = 0.1, C = 100)
+
+# plot
+fx01 <- Wherefx0(modelMultSVM$modellist[[1]])
+fx02 <- Wherefx0(modelMultSVM$modellist[[2]])
+fx03 <- Wherefx0(modelMultSVM$modellist[[3]])
+
+ggplot(data = iris.train, aes(x = Petal.Length, y = Petal.Width, colour = Species)) + 
+  geom_point(size = 2.0, shape = 16) + 
+  labs(title="Multi Guass SVM(Soft Margin, C = 100,Sigma = 0.1)") + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  stat_contour(data = fx01, aes(x = x1, y = x2, z = Y, colour = "bond"), 
+               breaks=c(0), size = 1) +
+  stat_contour(data = fx02, aes(x = x1, y = x2, z = Y, colour = "bond"), 
+               breaks=c(0), size = 1) +
+  stat_contour(data = fx03, aes(x = x1, y = x2, z = Y, colour = "bond"), 
+               breaks=c(0), size = 1)
+```
+
+* 测试集检验
+
+```{r multiguaaaSVMtest, echo=FALSE, eval=TRUE}
+PredictMultiGuass <- function(da, modellist, label){
+  # 
+    m <- nrow(da)
+    n <- ncol(da)
+  #
+    N <- length(modellist)
+    X <- as.matrix(da[, 1:(n-1)])
+  #
+    fxdata <- data.frame(matrix(0, ncol = N, nrow = m))
+    for(i in 1:N){
+      # 
+      modeli <- modellist[[i]]
+      PreGaussi <- PredictGauss(da, modeli)
+      fxdata[, i] <- PreGaussi$preYvalue
+    }
+    Presign <- apply(fxdata, 1, function(x){order(x, decreasing=T)[1]})
+    Presign <- label[Presign]
+  return(list(Presign = Presign, tb = table(Presign, True = da[, ncol(da)])))
+}
+
+PredMultiGUass <- PredictMultiGuass(iris.test, modelMultSVM$modellist, modelMultSVM$label)
+
+# plot
+ggplot(data = iris.test, aes(x = Petal.Length, y = Petal.Width, colour = Species)) + 
+  geom_point(size = 2.0, shape = 16) + 
+  labs(title="Multi Guass SVM (Test)") + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  stat_contour(data = fx01, aes(x = x1, y = x2, z = Y, colour = "bond"), 
+               breaks=c(0), size = 1) +
+  stat_contour(data = fx02, aes(x = x1, y = x2, z = Y, colour = "bond"), 
+               breaks=c(0), size = 1) +
+  stat_contour(data = fx03, aes(x = x1, y = x2, z = Y, colour = "bond"), 
+               breaks=c(0), size = 1)
+
+```
+
+* 支持向量机回归
+
+支持向量回归（Support Vector Regression，简称SVR）与传统模型不同的是，它假设我们能容忍$f(x)$与$y$之间最多有$\epsilon$的偏差，即仅当$f(x)$与$y$之间的绝对偏差大于$\epsilon$时才计算损失。
+
+```{r linerdata, eval=TRUE, echo=FALSE}
+X <- seq(1, 10, 0.1)
+set.seed(2)
+Y <- X + 1 + rnorm(length(X), 0, 0.3)
+linerda <- data.frame(X = X, Y = Y, label = c(rep("Train", 61), rep("Test", 30)))
+linerda.train <- linerda[1:61, 1:2]
+linerda.test <- linerda[62:91, 1:2]
+
+```
+
+
+```{r SVR, eval=TRUE, echo=FALSE}
+SVRbase <- function(da, epsilon = 0.3, C = 1){
+  #
+  n <- ncol(da)
+  m <- nrow(da)
+  X <- as.matrix(da[, 1:(n-1)], nrow = m)
+  Y <- as.matrix(da[, n], nrow = m)
+  #
+  w <- Variable(n-1)
+  b <- Variable(1)
+  kexi1 <- Variable(m)
+  kexi2 <- Variable(m)
+  #
+  objective <- Minimize(0.5 * norm(w, "F")^2 + C * sum(kexi1 + kexi2))
+  constraints <- list(X %*% w + b - Y <= epsilon + kexi1,
+                      Y - (X %*% w + b) <= epsilon + kexi2,
+                      kexi1 >= 0, kexi2 >= 0)
+  prob <- Problem(objective, constraints)
+  
+  # Problem solution
+  solution <- solve(prob)
+  w_res <- solution$getValue(w)
+  b_res <- solution$getValue(b)
+  return(list(w_res = w_res, b_res = b_res))
+}
+
+modelSVRbase <- SVRbase(linerda.train)
+w_res <- modelSVRbase$w_res
+b_res <- modelSVRbase$b_res
+
+ggplot(data = linerda, aes(x = X, y = Y, colour = label)) + 
+  geom_point(size = 2, shape = 16) + labs(title = "Linear Data") + 
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  geom_abline(slope = w_res, intercept = b_res, size = 0.6)
+
+```
+
+* 预测
+
+```{r SVRpredict, eval=TRUE, echo=FALSE}
+predictbaseSVR <- function(da, w_res, b_res){
+  #
+  n <- ncol(da)
+  m <- nrow(da)
+  X <- as.matrix(da[, 1:(n-1)], nrow = m)
+  Y <- as.matrix(da[, n], nrow = m)
+  #
+  PreY <- X %*% w_res + b_res
+  # sum of squared errors
+  SSE <- sum((PreY - Y)^2)
+  return(list(PreY = PreY, SSE = SSE))
+}
+Prelinertest <- predictbaseSVR(linerda.test, w_res, b_res)
+
+```
+
+* 注：高斯核画图
+
+利用等高线0表示分类边界。
+

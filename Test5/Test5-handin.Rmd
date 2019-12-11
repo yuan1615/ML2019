@@ -1,0 +1,280 @@
+---
+title: "Machine Learning 2019"
+author:
+  - 袁欣
+date: "2019年4月28日"
+documentclass: ctexart
+output:
+  rticles::ctex:
+    number_sections: yes
+classoption: "hyperref,"
+geometry: tmargin=2.5cm,bmargin=2.5cm,lmargin=2cm,rmargin=2cm
+---
+
+```{r eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE}
+options(stringsAsFactors = FALSE)
+options(drop = FALSE)
+library(ggplot2)
+library(easyGgplot2)
+library(tidyverse)
+library(caret)
+```
+
+# 神经网络
+
+## 西瓜数据3.0
+读入西瓜数据3.0，对分类变量进行独热编码（One-hot encoding）。
+
+```{r 5wmda, eval=TRUE, echo=FALSE}
+wmdaorign <- read.csv("西瓜数据3.0.csv")
+wmdaorign <- wmdaorign[, -1]
+dmy <- dummyVars(~., data = wmdaorign)
+wmda <- data.frame(predict(dmy, newdata = wmdaorign))
+```
+
+* 数据展示
+```{r 5datadis. , eval=TRUE, echo=FALSE}
+knitr::kable(wmda[1:5, 1:9])
+knitr::kable(wmda[1:5, 10:18])
+knitr::kable(wmda[1:5, 19:21])
+
+```
+
+
+```{r neural network, eval=TRUE, echo=FALSE}
+InitParam <- function(nx, nh, ny, seed = 2){
+  # 
+  set.seed(seed)
+  W1 <- matrix(rnorm(nx * nh), ncol = nx) * 0.01
+  b1 <- matrix(rep(0, nh), ncol = 1)
+  W2 <- matrix(rnorm(ny * nh), ncol = nh) * 0.01
+  b2 <- matrix(rep(0, ny), ncol = 1)
+  return(list(W1 = W1, b1 = b1, W2 = W2, b2 = b2))
+}
+InitParamDeep <- function(Ldims, seed = 2){
+  #
+  set.seed(seed)
+  Paramlist <- list()
+  L = length(Ldims)
+  for(i in 2:L){
+    Wi <- matrix(rnorm(Ldims[i-1] * Ldims[i]), ncol = Ldims[i-1]) * 0.01
+    bi <- matrix(rep(0, Ldims[i]), ncol = 1)
+    Paramlist[[i-1]] <- list(Wi = Wi, bi = bi)
+  }
+  return(Paramlist)
+}
+
+LinearForward <- function(A, W, b){
+  #
+  Z <- W %*% A + matrix(rep(b, ncol(A)), ncol = ncol(A))
+  return(list(Z = Z, A = A, W = W, b = b))
+}
+sigmoid <- function(Z){
+  #
+  A <- 1 / (1 + exp(-Z))
+  return(A)
+}
+LinActForward <- function(Aprev, W, b){
+  #
+  templist <- LinearForward(Aprev, W, b)
+  Z <- templist$Z
+  A <- sigmoid(Z)
+  return(list(Z = Z, A = A, W = W, b = b, Aprev = Aprev))
+}
+
+LModelForward <- function(X, Paramlist){
+  #
+  cacheslist <- list()
+  A <- X
+  L <- length(Paramlist)
+  
+  for(i in 1:L){
+    Aprev <- A
+    W <- Paramlist[[i]]$W
+    b <- Paramlist[[i]]$b
+    templist <- LinActForward(Aprev, W, b)
+    A <- templist$A
+    cacheslist[[i]] <- templist
+  }
+  return(list(A = A, cacheslist = cacheslist))
+}
+
+ComputeCost <- function(AL, Y){
+  #
+  m <- length(Y)
+  cost <- -1/m * sum(Y * log(AL) + (1-Y) * log(1-AL))
+  return(cost)
+}
+
+LinActBackward <- function(dA, cache){
+  #
+  APrev <- cache$Aprev
+  W <- cache$W
+  b <- cache$b
+  Z <- cache$Z
+  m <- ncol(APrev)
+  #
+  s <- 1/(1+exp(-Z))
+  dZ <- dA * (s * (1 - s))
+  dAprev <- t(W) %*% dZ
+  dW <- 1/m * dZ %*% t(APrev)
+  db <- 1/m * rowSums(dZ)
+  return(list(dAprev = dAprev, dW = dW, db = db))
+}
+LModelBackward <- function(AL, Y, cacheslist){
+  #
+  grads <- list()
+  L <- length(cacheslist)
+  m <- length(AL)
+  #
+  dAL <- -Y/AL + (1-Y)/(1-AL)
+  dA <- dAL
+  
+  for(i in L:1){
+    # 
+    grads[[i]] <- LinActBackward(dA, cacheslist[[i]])
+    dA <- grads[[i]]$dAprev
+    
+  }
+  return(grads)
+}
+UpdateParams <- function(Paramlist, grads, learnrate = 0.1){
+  #
+  L <- length(Paramlist)
+  for(i in 1:L){
+    Paramlist[[i]]$Wi <- Paramlist[[i]]$Wi - learnrate * grads[[i]]$dW
+    Paramlist[[i]]$bi <- Paramlist[[i]]$bi - learnrate * grads[[i]]$db    
+  }
+  return(Paramlist)
+}
+
+NNmodel <- function(X, Y, Ldims, seed = 2, learnrate = 0.1, numiter = 10000, printcost = FALSE){
+  #
+  costs <- vector(length = numiter)
+  
+  #
+  Paramlist <- InitParamDeep(Ldims, seed = seed)
+  #
+  for(i in 1:numiter){
+    #
+    Forward <- LModelForward(X, Paramlist)
+    AL <- Forward$A
+    cacheslist <- Forward$cacheslist
+    #
+    cost <- ComputeCost(AL, Y)
+    #
+    grads <- LModelBackward(AL, Y, cacheslist)
+    #
+    Paramlist <- UpdateParams(Paramlist, grads, learnrate)
+    if(printcost == TRUE & i%%100==0){
+      print(paste("Cost after iteration", i, ":", cost))
+    }
+    costs[i] <- cost
+  }
+  return(list(Paramlist = Paramlist, costs = costs))
+}
+
+NNmodelSGD <- function(X, Y, Ldims, seed = 2, learnrate = 0.1, numiter = 100, printcost = FALSE){
+  #
+  m <- ncol(Y)
+  costs <- vector(length = numiter*m)
+  
+  #
+  Paramlist <- InitParamDeep(Ldims, seed = seed)
+  Xall <- X
+  Yall <- Y
+  #
+  for(i in 1:numiter){
+    #
+    for(j in 1:m){
+      X <- Xall[, j, drop = FALSE]
+      Y <- Yall[, j, drop = FALSE]
+      Forward <- LModelForward(X, Paramlist)
+      AL <- Forward$A
+      cacheslist <- Forward$cacheslist
+      #
+      cost <- ComputeCost(AL, Y)
+      #
+      grads <- LModelBackward(AL, Y, cacheslist)
+      #
+      Paramlist <- UpdateParams(Paramlist, grads, learnrate)
+      if(printcost == TRUE & i%%100==0){
+        print(paste("Cost after iteration", i, ":", cost))
+      }
+      costs[m*(i-1) + j] <- cost
+    }
+    
+  }
+  return(list(Paramlist = Paramlist, costs = costs))
+}
+NNpredict <- function(NewX, NewY, Model){
+  #
+  PreY <- LModelForward(NewX, Model$Paramlist)$A
+  PreY <- ifelse(PreY >= 0.5, 1, 0)
+  tb <- table(PreY, NewY)
+  accuracy <- sum(diag(tb)) / sum(tb)
+  return(list(PreY = PreY, tb = tb, accuracy = accuracy))
+}
+
+```
+
+## 神经网络模型
+
+### 批量梯度下降
+
+```{r NNmodel, eval=TRUE, echo=FALSE}
+X <- t(as.matrix(wmda[, 1:19]))
+Y <- t(as.matrix(wmda[, 21]))
+
+set.seed(seed = 1)
+ind <- sample(ncol(Y), 12)
+X.train <- X[, ind]
+Y.train <- Y[, ind, drop = FALSE]
+X.test <- X[, -ind]
+Y.test <- Y[, -ind, drop = FALSE]
+
+Model <- NNmodel(X.train, Y.train, Ldims = c(19, 10, 1), seed = 2, learnrate = 0.1, numiter = 2000)
+
+# plot cost
+costs <- data.frame(iter = 1:2000, cost = Model$costs)
+ggplot(data = costs, aes(x = iter, y = cost)) + geom_line(color = "red")
+
+# Predict
+Predict.train <- NNpredict(X.train, Y.train, Model)
+print(paste("The Train accuracy is : ", Predict.train$accuracy * 100, "%"))
+print("The confusion matrix is : ")
+Predict.train$tb
+
+# Test
+Predict.test <- NNpredict(X.test, Y.test, Model)
+print(paste("The Test accuracy is : ", Predict.test$accuracy * 100, "%"))
+print("The confusion matrix is : ")
+Predict.test$tb
+
+```
+
+### 随机梯度下降
+
+```{r Stochasticgradientdescent, eval=TRUE, echo=FALSE}
+ModelSGD <- NNmodelSGD(X.train, Y.train, Ldims = c(19, 10, 1), 
+                    seed = 2, learnrate = 0.1, numiter = 100)
+
+# plot cost
+costs <- data.frame(iter = 1:(12 * 100), cost = ModelSGD$costs)
+ggplot(data = costs, aes(x = iter, y = cost)) + geom_line(color = "red")
+
+# Predict
+Predict.train <- NNpredict(X.train, Y.train, ModelSGD)
+print(paste("The Train accuracy is : ", Predict.train$accuracy * 100, "%"))
+print("The confusion matrix is : ")
+Predict.train$tb
+
+# Test
+Predict.test <- NNpredict(X.test, Y.test, ModelSGD)
+print(paste("The Test accuracy is : ", Predict.test$accuracy * 100, "%"))
+print("The confusion matrix is : ")
+Predict.test$tb
+
+```
+
+
